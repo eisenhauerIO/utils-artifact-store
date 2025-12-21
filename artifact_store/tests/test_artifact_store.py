@@ -196,6 +196,13 @@ class TestPickleOperations:
 class TestParquetOperations:
     """Test parquet read/write operations."""
 
+    @pytest.mark.skipif(
+        not any(
+            __import__("importlib.util", fromlist=["find_spec"]).find_spec(pkg)
+            for pkg in ["pyarrow", "fastparquet"]
+        ),
+        reason="pyarrow or fastparquet required",
+    )
     def test_write_and_read_parquet(self, store):
         """Test writing and reading parquet."""
         df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
