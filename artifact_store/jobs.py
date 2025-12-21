@@ -34,6 +34,15 @@ class JobInfo:
     def __str__(self) -> str:
         return self.job_id
 
+    @property
+    def full_path(self) -> str:
+        """Get the full path to this job's directory.
+
+        Returns:
+            Full path as {storage_path}/{job_id}
+        """
+        return f"{self.storage_path}/{self.job_id}"
+
     def get_store(self) -> "ArtifactStore":
         """Get an ArtifactStore for this job's directory.
 
@@ -42,7 +51,7 @@ class JobInfo:
         """
         from .store import ArtifactStore
 
-        return ArtifactStore(f"{self.storage_path}/{self.job_id}")
+        return ArtifactStore(self.full_path)
 
     def save_df(self, name: str, df: pd.DataFrame) -> None:
         """Save DataFrame to job directory as CSV.
