@@ -1,14 +1,13 @@
 """Job management utilities for artifact storage.
 
 Provides a lightweight JobInfo dataclass for organizing artifacts by job ID,
-along with helper functions for job creation, listing, and cleanup.
+along with helper functions for job creation.
 """
 
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Optional
 
 import pandas as pd
 
@@ -24,7 +23,7 @@ class JobInfo:
     with its own isolated storage directory.
 
     Attributes:
-        job_id: Unique identifier for the job (e.g., "job-20251221-123456-abc12345")
+        job_id: Unique identifier for the job
         storage_path: Base storage path where job directories are created
     """
 
@@ -94,60 +93,49 @@ def generate_job_id(prefix: str = "job") -> str:
     return f"{prefix}-{timestamp}-{short_uuid}"
 
 
-def create_job(storage_path: str, prefix: str = "job") -> JobInfo:
-    """Create a new JobInfo with auto-generated ID.
+def _validate_job_id(job_id: str) -> None:
+    """Validate job ID for filesystem/S3 safety.
+
+    Args:
+        job_id: The job ID to validate
+
+    Raises:
+        ValueError: If job_id is empty, too long, or contains invalid characters
+    """
+    if not job_id:
+        raise ValueError("Job ID cannot be empty")
+
+    invalid_chars = set("/\\:\0")
+    found_invalid = [c for c in job_id if c in invalid_chars]
+    if found_invalid:
+        raise ValueError(f"Job ID contains invalid characters: {found_invalid}")
+
+    if len(job_id) > 256:
+        raise ValueError("Job ID exceeds maximum length of 256 characters")
+
+
+def create_job(
+    storage_path: str,
+    prefix: str = "job",
+    job_id: Optional[str] = None,
+) -> JobInfo:
+    """Create a new JobInfo.
 
     Args:
         storage_path: Base storage path for job directories
-        prefix: Prefix for the job ID (default: "job")
+        prefix: Prefix for the job ID (default: "job"), ignored if job_id provided
+        job_id: Optional caller-provided job ID. Must contain only
+               filesystem-safe characters. If not provided, auto-generated.
 
     Returns:
-        JobInfo with generated job_id and the specified storage_path
+        JobInfo with the job_id and storage_path
+
+    Raises:
+        ValueError: If job_id contains invalid characters
     """
-    return JobInfo(job_id=generate_job_id(prefix), storage_path=storage_path)
+    if job_id is None:
+        job_id = generate_job_id(prefix)
+    else:
+        _validate_job_id(job_id)
 
-
-def list_jobs(storage_path: str, prefix: str = "job") -> List[str]:
-    """List all job IDs in a storage path.
-
-    Args:
-        storage_path: Base path where job directories are stored
-        prefix: Job ID prefix to filter by (default: "job")
-
-    Returns:
-        List of job IDs sorted by creation time (newest first)
-    """
-    output_dir = Path(storage_path)
-    if not output_dir.exists():
-        return []
-
-    jobs = [
-        d.name for d in output_dir.iterdir()
-        if d.is_dir() and d.name.startswith(f"{prefix}-")
-    ]
-    return sorted(jobs, reverse=True)
-
-
-def cleanup_old_jobs(storage_path: str, prefix: str = "job", keep: int = 10) -> List[str]:
-    """Clean up old job directories, keeping only the most recent ones.
-
-    Args:
-        storage_path: Base path where job directories are stored
-        prefix: Job ID prefix to filter by (default: "job")
-        keep: Number of recent jobs to keep (default: 10)
-
-    Returns:
-        List of removed job IDs
-    """
-    jobs = list_jobs(storage_path, prefix)
-    if len(jobs) <= keep:
-        return []
-
-    removed = []
-    for job_id in jobs[keep:]:
-        job = JobInfo(job_id=job_id, storage_path=storage_path)
-        store = job.get_store()
-        if store.exists(""):
-            store.delete()
-            removed.append(job_id)
-    return removed
+    return JobInfo(job_id=job_id, storage_path=storage_path)

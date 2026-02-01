@@ -34,13 +34,7 @@ from artifact_store.exceptions import (
     MissingDependencyError,
     StorageError,
 )
-from artifact_store.jobs import (
-    JobInfo,
-    cleanup_old_jobs,
-    create_job,
-    generate_job_id,
-    list_jobs,
-)
+from artifact_store.jobs import JobInfo, create_job, generate_job_id
 from artifact_store.store import ArtifactStore
 
 __all__ = [
@@ -49,8 +43,6 @@ __all__ = [
     "MissingDependencyError",
     "StorageError",
     "JobInfo",
-    "cleanup_old_jobs",
     "create_job",
     "generate_job_id",
-    "list_jobs",
 ]
