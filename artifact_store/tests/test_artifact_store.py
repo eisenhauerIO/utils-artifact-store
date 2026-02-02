@@ -211,6 +211,120 @@ class TestParquetOperations:
         pd.testing.assert_frame_equal(result, df)
 
 
+class TestReadDataAutoDetection:
+    """Test read_data auto-detection functionality."""
+
+    def test_read_data_csv_file(self, store):
+        """Test auto-detect single CSV file."""
+        df = pd.DataFrame({"a": [1, 2], "b": ["x", "y"]})
+        store.write_csv("data.csv", df)
+        result = store.read_data("data.csv")
+        pd.testing.assert_frame_equal(result, df)
+
+    @pytest.mark.skipif(
+        not any(
+            __import__("importlib.util", fromlist=["find_spec"]).find_spec(pkg)
+            for pkg in ["pyarrow", "fastparquet"]
+        ),
+        reason="pyarrow or fastparquet required",
+    )
+    def test_read_data_parquet_file(self, store):
+        """Test auto-detect single parquet file."""
+        df = pd.DataFrame({"a": [1, 2], "b": ["x", "y"]})
+        store.write_parquet("data.parquet", df)
+        result = store.read_data("data.parquet")
+        pd.testing.assert_frame_equal(result, df)
+
+    def test_read_data_csv_directory(self, store):
+        """Test auto-detect CSV directory."""
+        df1 = pd.DataFrame({"a": [1, 2]})
+        df2 = pd.DataFrame({"a": [3, 4]})
+        os.makedirs(store.full_path("csv_data"), exist_ok=True)
+        store.write_csv("csv_data/file1.csv", df1)
+        store.write_csv("csv_data/file2.csv", df2)
+        result = store.read_data("csv_data")
+        assert len(result) == 4
+
+    @pytest.mark.skipif(
+        not any(
+            __import__("importlib.util", fromlist=["find_spec"]).find_spec(pkg)
+            for pkg in ["pyarrow", "fastparquet"]
+        ),
+        reason="pyarrow or fastparquet required",
+    )
+    def test_read_data_parquet_directory(self, store):
+        """Test auto-detect parquet directory."""
+        df = pd.DataFrame({"a": [1, 2], "b": ["x", "y"]})
+        os.makedirs(store.full_path("pq_data"), exist_ok=True)
+        store.write_parquet("pq_data/part-0.parquet", df)
+        result = store.read_data("pq_data")
+        pd.testing.assert_frame_equal(result, df)
+
+    @pytest.mark.skipif(
+        not any(
+            __import__("importlib.util", fromlist=["find_spec"]).find_spec(pkg)
+            for pkg in ["pyarrow", "fastparquet"]
+        ),
+        reason="pyarrow or fastparquet required",
+    )
+    def test_read_data_ambiguous_directory(self, store):
+        """Test error for directory with both CSV and parquet."""
+        store.write_csv("mixed/data.csv", pd.DataFrame({"a": [1]}))
+        store.write_parquet("mixed/data.parquet", pd.DataFrame({"b": [2]}))
+        with pytest.raises(StorageError, match="Ambiguous"):
+            store.read_data("mixed")
+
+    def test_read_data_empty_directory(self, store):
+        """Test error for empty directory."""
+        os.makedirs(store.full_path("empty_dir"), exist_ok=True)
+        with pytest.raises(FileNotFoundError, match="No CSV or Parquet"):
+            store.read_data("empty_dir")
+
+    def test_read_data_explicit_csv_format(self, store):
+        """Test explicit format override for CSV."""
+        df = pd.DataFrame({"a": [1, 2]})
+        store.write_csv("data/file.csv", df)
+        result = store.read_data("data", format="csv")
+        pd.testing.assert_frame_equal(result, df)
+
+    @pytest.mark.skipif(
+        not any(
+            __import__("importlib.util", fromlist=["find_spec"]).find_spec(pkg)
+            for pkg in ["pyarrow", "fastparquet"]
+        ),
+        reason="pyarrow or fastparquet required",
+    )
+    def test_read_data_explicit_format_ambiguous_dir(self, store):
+        """Test explicit format resolves ambiguous directory."""
+        csv_df = pd.DataFrame({"a": [1, 2]})
+        pq_df = pd.DataFrame({"b": [3, 4]})
+        store.write_csv("mixed2/data.csv", csv_df)
+        store.write_parquet("mixed2/data.parquet", pq_df)
+
+        csv_result = store.read_data("mixed2", format="csv")
+        pd.testing.assert_frame_equal(csv_result, csv_df)
+
+        pq_result = store.read_data("mixed2", format="parquet")
+        pd.testing.assert_frame_equal(pq_result, pq_df)
+
+    def test_read_data_invalid_format(self, store):
+        """Test error for invalid format parameter."""
+        store.write_csv("data.csv", pd.DataFrame({"a": [1]}))
+        with pytest.raises(ValueError, match="Unsupported format"):
+            store.read_data("data.csv", format="json")
+
+    def test_read_data_unknown_extension(self, store):
+        """Test error for unknown file extension."""
+        store.write_text("data.txt", "content")
+        with pytest.raises(StorageError, match="Cannot determine format"):
+            store.read_data("data.txt")
+
+    def test_read_data_nonexistent_path(self, store):
+        """Test error for non-existent path."""
+        with pytest.raises(FileNotFoundError):
+            store.read_data("does_not_exist")
+
+
 class TestFileOperations:
     """Test file operations (exists, delete, copy, list)."""
 

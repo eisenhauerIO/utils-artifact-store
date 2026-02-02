@@ -329,6 +329,9 @@ class ArtifactStore:
     def read_parquet(self, relative_path: str) -> pd.DataFrame:
         """Read Parquet file(s) from storage.
 
+        Automatically handles both single files and directories containing
+        multiple Parquet files (concatenates them).
+
         Parameters
         ----------
         relative_path : str
@@ -345,7 +348,16 @@ class ArtifactStore:
             wr, _ = _get_awswrangler()
             return wr.s3.read_parquet(full_path)
         else:
-            return pd.read_parquet(full_path)
+            if os.path.isfile(full_path):
+                return pd.read_parquet(full_path)
+            elif os.path.isdir(full_path):
+                parquet_files = glob.glob(os.path.join(full_path, "**", "*.parquet"), recursive=True)
+                if not parquet_files:
+                    raise FileNotFoundError(f"No Parquet files found in {full_path}")
+                dfs = [pd.read_parquet(f) for f in parquet_files]
+                return pd.concat(dfs, ignore_index=True)
+            else:
+                raise FileNotFoundError(f"Path not found: {full_path}")
 
     def write_parquet(self, relative_path: str, df: pd.DataFrame) -> None:
         """Write DataFrame to Parquet file.
@@ -365,6 +377,176 @@ class ArtifactStore:
         else:
             self._ensure_local_dir(full_path)
             df.to_parquet(full_path, index=False)
+
+    # -------------------------------------------------------------------------
+    # Auto-detect data operations
+    # -------------------------------------------------------------------------
+
+    def _detect_data_format(self, relative_path: str) -> str:
+        """Detect the data format of a path.
+
+        Parameters
+        ----------
+        relative_path : str
+            Path relative to base_path
+
+        Returns
+        -------
+        str
+            "csv" or "parquet"
+
+        Raises
+        ------
+        FileNotFoundError
+            If path does not exist or contains no data files
+        StorageError
+            If format is ambiguous (directory contains both CSV and parquet)
+        """
+        full_path = self.full_path(relative_path)
+
+        if self._is_s3:
+            return self._detect_format_s3(full_path)
+        else:
+            return self._detect_format_local(full_path)
+
+    def _detect_format_local(self, full_path: str) -> str:
+        """Detect format for local filesystem path."""
+        # Single file case
+        if os.path.isfile(full_path):
+            lower_path = full_path.lower()
+            if lower_path.endswith(".csv"):
+                return "csv"
+            elif lower_path.endswith(".parquet"):
+                return "parquet"
+            else:
+                raise StorageError(
+                    f"Cannot determine format for file: {full_path}. "
+                    "Supported extensions: .csv, .parquet"
+                )
+
+        # Directory case
+        if os.path.isdir(full_path):
+            csv_files = glob.glob(os.path.join(full_path, "**", "*.csv"), recursive=True)
+            parquet_files = glob.glob(os.path.join(full_path, "**", "*.parquet"), recursive=True)
+            # Check for _metadata (Parquet dataset marker)
+            metadata_files = glob.glob(os.path.join(full_path, "**", "_metadata"), recursive=True)
+
+            has_parquet = bool(parquet_files) or bool(metadata_files)
+            has_csv = bool(csv_files)
+
+            if has_parquet and has_csv:
+                raise StorageError(
+                    f"Ambiguous directory format: {full_path} contains both "
+                    f"CSV ({len(csv_files)} files) and Parquet ({len(parquet_files)} files). "
+                    "Use format='csv' or format='parquet' to specify explicitly."
+                )
+            elif has_parquet:
+                return "parquet"
+            elif has_csv:
+                return "csv"
+            else:
+                raise FileNotFoundError(f"No CSV or Parquet files found in directory: {full_path}")
+
+        raise FileNotFoundError(f"Path not found: {full_path}")
+
+    def _detect_format_s3(self, full_path: str) -> str:
+        """Detect format for S3 path."""
+        wr, _ = _get_awswrangler()
+
+        # Check if path looks like a single file
+        lower_path = full_path.lower()
+        if lower_path.endswith(".csv"):
+            return "csv"
+        elif lower_path.endswith(".parquet"):
+            return "parquet"
+
+        # Directory/prefix case - list objects
+        search_path = full_path if full_path.endswith("/") else full_path + "/"
+        try:
+            objects = wr.s3.list_objects(search_path)
+        except Exception:
+            objects = []
+
+        if not objects:
+            raise FileNotFoundError(f"No objects found at: {full_path}")
+
+        csv_files = [o for o in objects if o.lower().endswith(".csv")]
+        parquet_files = [o for o in objects if o.lower().endswith(".parquet")]
+        metadata_files = [o for o in objects if o.endswith("_metadata")]
+
+        has_parquet = bool(parquet_files) or bool(metadata_files)
+        has_csv = bool(csv_files)
+
+        if has_parquet and has_csv:
+            raise StorageError(
+                f"Ambiguous S3 prefix: {full_path} contains both "
+                f"CSV ({len(csv_files)} files) and Parquet ({len(parquet_files)} files). "
+                "Use format='csv' or format='parquet' to specify explicitly."
+            )
+        elif has_parquet:
+            return "parquet"
+        elif has_csv:
+            return "csv"
+        else:
+            raise FileNotFoundError(f"No CSV or Parquet files found at: {full_path}")
+
+    def read_data(self, relative_path: str, format: Optional[str] = None) -> pd.DataFrame:
+        """Read data file(s) from storage with automatic format detection.
+
+        Automatically detects and reads CSV or Parquet files. For single files,
+        detection is based on file extension. For directories, detection is based
+        on the file types present in the directory.
+
+        Parameters
+        ----------
+        relative_path : str
+            Path relative to base_path (file or directory)
+        format : str, optional
+            Explicit format override: "csv" or "parquet". If provided, skips
+            auto-detection and uses the specified format.
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame loaded from the data file(s)
+
+        Raises
+        ------
+        FileNotFoundError
+            If the path does not exist or contains no supported data files
+        StorageError
+            If the format cannot be determined (ambiguous directory contents)
+        ValueError
+            If an unsupported format is explicitly specified
+
+        Examples
+        --------
+        >>> # Auto-detect single file
+        >>> df = store.read_data("results/output.csv")
+        >>> df = store.read_data("results/output.parquet")
+        >>>
+        >>> # Auto-detect directory
+        >>> df = store.read_data("results/csv_files/")
+        >>> df = store.read_data("results/partitioned_parquet/")
+        >>>
+        >>> # Explicit format override
+        >>> df = store.read_data("data_files/", format="csv")
+        """
+        # Validate explicit format if provided
+        if format is not None:
+            format = format.lower()
+            if format not in ("csv", "parquet"):
+                raise ValueError(f"Unsupported format: '{format}'. Supported formats: 'csv', 'parquet'")
+            detected_format = format
+        else:
+            # Auto-detect format
+            detected_format = self._detect_data_format(relative_path)
+
+        # Route to appropriate reader
+        if detected_format == "csv":
+            return self.read_csv(relative_path)
+        else:  # parquet
+            return self.read_parquet(relative_path)
 
     # -------------------------------------------------------------------------
     # Pickle operations
