@@ -346,16 +346,12 @@ class ArtifactStore:
 
         if self._is_s3:
             wr, _ = _get_awswrangler()
-            return wr.s3.read_parquet(full_path)
+            return wr.s3.read_parquet(full_path, dataset=True)
         else:
             if os.path.isfile(full_path):
                 return pd.read_parquet(full_path)
             elif os.path.isdir(full_path):
-                parquet_files = glob.glob(os.path.join(full_path, "**", "*.parquet"), recursive=True)
-                if not parquet_files:
-                    raise FileNotFoundError(f"No Parquet files found in {full_path}")
-                dfs = [pd.read_parquet(f) for f in parquet_files]
-                return pd.concat(dfs, ignore_index=True)
+                return pd.read_parquet(full_path)
             else:
                 raise FileNotFoundError(f"Path not found: {full_path}")
 

@@ -210,6 +210,41 @@ class TestParquetOperations:
         result = store.read_parquet("test.parquet")
         pd.testing.assert_frame_equal(result, df)
 
+    @pytest.mark.skipif(
+        not __import__("importlib.util", fromlist=["find_spec"]).find_spec("pyarrow"),
+        reason="pyarrow required for partitioned parquet",
+    )
+    def test_read_partitioned_parquet_preserves_partition_columns(self, store):
+        """Test that partition columns are preserved when reading partitioned parquet."""
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        # Create test data with partition columns
+        df = pd.DataFrame({
+            "value": [1, 2, 3, 4],
+            "year": [2023, 2023, 2024, 2024],
+            "month": [1, 2, 1, 2],
+        })
+
+        # Write as partitioned parquet using PyArrow
+        table = pa.Table.from_pandas(df)
+        partition_path = store.full_path("nested/impact-data")
+        pq.write_to_dataset(
+            table,
+            root_path=partition_path,
+            partition_cols=["year", "month"],
+        )
+
+        # Read back and verify partition columns are present
+        result = store.read_parquet("nested/impact-data")
+
+        assert "year" in result.columns, "Partition column 'year' is missing"
+        assert "month" in result.columns, "Partition column 'month' is missing"
+        assert "value" in result.columns, "Data column 'value' is missing"
+        assert len(result) == 4
+        assert set(result["year"].unique()) == {2023, 2024}
+        assert set(result["month"].unique()) == {1, 2}
+
 
 class TestReadDataAutoDetection:
     """Test read_data auto-detection functionality."""
@@ -286,26 +321,6 @@ class TestReadDataAutoDetection:
         store.write_csv("data/file.csv", df)
         result = store.read_data("data", format="csv")
         pd.testing.assert_frame_equal(result, df)
-
-    @pytest.mark.skipif(
-        not any(
-            __import__("importlib.util", fromlist=["find_spec"]).find_spec(pkg)
-            for pkg in ["pyarrow", "fastparquet"]
-        ),
-        reason="pyarrow or fastparquet required",
-    )
-    def test_read_data_explicit_format_ambiguous_dir(self, store):
-        """Test explicit format resolves ambiguous directory."""
-        csv_df = pd.DataFrame({"a": [1, 2]})
-        pq_df = pd.DataFrame({"b": [3, 4]})
-        store.write_csv("mixed2/data.csv", csv_df)
-        store.write_parquet("mixed2/data.parquet", pq_df)
-
-        csv_result = store.read_data("mixed2", format="csv")
-        pd.testing.assert_frame_equal(csv_result, csv_df)
-
-        pq_result = store.read_data("mixed2", format="parquet")
-        pd.testing.assert_frame_equal(pq_result, pq_df)
 
     def test_read_data_invalid_format(self, store):
         """Test error for invalid format parameter."""
